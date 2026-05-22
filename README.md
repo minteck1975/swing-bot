@@ -112,36 +112,46 @@ run(min_dollar_vol=100_000_000)  # only stocks with >$100M avg daily dollar volu
 - The minimum stop distance is **0.75 ATR** even if the trigger bar's low is closer, to avoid stop-hunt wicks.
 - **Not financial advice.** Backtest before risking real capital. Strategy tuning happens in `score_setup()` weights and the tier thresholds.
 
-## Automate it on GitHub (free, runs daily before market open)
+## Automate it on GitHub (free, runs daily after market close)
 
-The repo ships with a workflow at `.github/workflows/premarket-scan.yml` that scans the S&P 500 at **8:30am ET (1 hour before market open)** Mon–Fri, commits the fresh `results.json` back to your repo, and uploads it as a workflow artifact.
+The repo ships with a workflow at `.github/workflows/postmarket-scan.yml` that does three things:
+
+1. **Scans the S&P 500 at 5:00pm ET** (1 hour after the 4pm close) Mon–Fri, using yesterday's full daily candle to find tomorrow's setups
+2. **Commits the fresh `results.json`** back to your repo so the history is preserved
+3. **Auto-deploys the dashboard to GitHub Pages** as your homepage, so visiting `https://YOUR-USERNAME.github.io/REPO-NAME/` shows the latest scan every morning
 
 **Setup (5 minutes):**
 
-1. Create a new GitHub repo and push these files:
+1. Create a new GitHub repo and push these files (must be **public** for free Pages):
    ```bash
    git init
    git add .
    git commit -m "initial commit"
-   gh repo create swing-screener --public --source=. --push
-   # or: create the repo via the web UI, then git push
+   gh repo create swing-bot --public --source=. --push
+   # or create via the GitHub web UI, then git push
    ```
-2. In your repo on GitHub, go to **Settings → Actions → General**.
-   - Under "Workflow permissions", select **Read and write permissions** and save.  
-     This lets the scheduled job commit the daily `results.json` back to the repo.
-3. (Optional but recommended) Enable GitHub Pages:
-   - **Settings → Pages → Source = main branch / root**.
-   - After ~30 seconds, visit `https://YOUR-USERNAME.github.io/REPO-NAME/dashboard.html` — the dashboard auto-loads the latest `results.json` from the repo every time you refresh.
-4. To smoke-test before tomorrow's pre-market run:
-   - Go to **Actions → Pre-market swing scan → Run workflow**. It'll bail out with "outside pre-market window" unless you're actually in the 8am-9am ET window, since the script defends against double-firing across DST. To force a test, comment out the timing check in the workflow YAML.
+2. **Settings → Actions → General → Workflow permissions** → select **Read and write permissions** and save.  
+   This lets the scheduled job commit `results.json` back to the repo.
+3. **Settings → Pages → Build and deployment → Source** → select **GitHub Actions** (NOT "Deploy from a branch").  
+   The workflow handles the deployment itself, so you don't need to pick a branch.
+4. Trigger the first deploy: **Actions → Post-market swing scan → Run workflow**.  
+   Manual triggers always run regardless of time, so this gives you an immediate live dashboard.
+5. After ~1 minute, visit `https://YOUR-USERNAME.github.io/REPO-NAME/` — your dashboard is live.
 
 **How the scheduling works:**
 
-GitHub Actions cron is in UTC and doesn't understand US daylight saving. The workflow registers two crons (13:30 UTC and 14:30 UTC) so that at least one fires at 8:30am ET year-round, then the Python timing check exits early on the one that's wrong for the current DST regime. So you get exactly one run per market morning.
+GitHub Actions cron is in UTC and doesn't understand US daylight saving. The workflow registers two crons (21:00 UTC and 22:00 UTC) so that one always fires at 5:00pm ET year-round, then the Python timing check exits early on the cron that's wrong for the current DST regime. You get exactly one scheduled run per market afternoon.
 
-**Caveats to know:**
+**Why 5pm ET (post-market) instead of pre-market:**
 
-- **GitHub Actions cron is "best effort"**, not millisecond-precise. Scheduled jobs are routinely delayed 5-20 minutes during peak load; occasionally a job is skipped entirely. For real money, don't assume "8:30 sharp."
-- **Yahoo Finance rate limits.** A 500-ticker scan with 4 fetches each (daily + 1H, plus indirect calls) is ~2000 requests. yfinance occasionally returns empty/throttled responses; the screener catches these per-ticker and continues, but on a bad day you'll see a higher than usual count of `NO_DATA` rows. If you start seeing this consistently, drop concurrency from 12 → 6 in `screen()` or switch to a paid feed.
+- Daily candle is fully formed — yesterday's bullish engulfing is real, not a half-bar that could still reverse
+- Yahoo Finance has had hours to ingest closing prices, so the data is reliable
+- You see tomorrow's setups the night before, with time to plan position sizing and write orders into your broker
+
+**Caveats:**
+
+- **GitHub Actions cron is "best effort"**, not millisecond-precise. Scheduled jobs are routinely delayed 5-20 minutes during peak load; occasionally a job is skipped entirely. The data is the same regardless of whether you see it at 5:00, 5:15, or 9pm.
+- **Yahoo Finance rate limits.** A 500-ticker scan with multi-timeframe fetches is ~2000 requests. yfinance occasionally returns empty/throttled responses; the screener catches these per-ticker and continues, but on a bad day you'll see more `NO_DATA` rows. If consistently bad, drop concurrency from 12 → 6 in `screen()` or switch to a paid feed.
 - **Public repos have unlimited Actions minutes; private repos get 2000/month free** — way more than this needs (each run is ~5 min).
+- **Free-tier GitHub Pages requires a public repo.** Your `results.json` becomes publicly readable — but it's just stock screener output, no credentials involved.
 - **Holidays** are hardcoded for 2026-2027 in `is_us_market_day()`. Extend the dict when 2028 approaches.
