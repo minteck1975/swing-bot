@@ -39,7 +39,7 @@ jobs:
   # =========================================================================
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # Skip the scan job when this workflow was triggered by a push
     # (the push handler is just there to redeploy Pages)
     if: github.event_name != 'push'
@@ -93,7 +93,16 @@ jobs:
 
       - name: Run swing screener
         if: steps.timing.outputs.should_run == 'true'
-        run: python swing_screener.py
+        env:
+          # On manual triggers, force the screener to run even on weekends/holidays
+          # so the user can test or get an on-demand scan whenever they want.
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        run: |
+          if [ "$FORCE_RUN" = "true" ]; then
+            python -c "from swing_screener import run; run(skip_non_market_days=False)"
+          else
+            python swing_screener.py
+          fi
 
       - name: Commit results
         if: steps.timing.outputs.should_run == 'true'
@@ -147,6 +156,7 @@ jobs:
           cp dashboard.html _site/index.html      # serve dashboard as the homepage
           cp dashboard.html _site/dashboard.html  # also keep original path
           cp results.json _site/
+          cp icon.svg _site/                       # favicon
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
