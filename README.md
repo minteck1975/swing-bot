@@ -1,6 +1,8 @@
-# 8-EMA Pullback Swing Screener
+# 8-EMA Pullback + Market Leadership Swing Screener
 
-A two-part bot that screens US stocks for the **8-EMA Pullback** swing setup: stocks in an established uptrend that have just pulled back to the 8-day EMA on declining volume, with a bullish reversal candle signaling continuation.
+A two-part bot that screens US stocks for the **8-EMA Pullback** swing setup, filtered down to **market leaders** outperforming the S&P 500: stocks in an established uptrend that have just pulled back to the 8-day EMA on declining volume, with a bullish reversal candle signaling continuation — *and* showing positive relative strength.
+
+The leadership filters are distilled from 14 trader methodologies (Minervini, Qullamaggie, O'Neil, Stan Weinstein, Mike Webster, Patrick Walker, Richard Moglen, and others) that all share the same common DNA: trade leaders, not laggards.
 
 ## The strategy in 4 steps
 
@@ -10,13 +12,18 @@ A two-part bot that screens US stocks for the **8-EMA Pullback** swing setup: st
 - 50-EMA sloping up
 - Weekly chart confirms — price above the weekly 20-EMA, weekly slope up
 
-### 2. Pullback (the entry zone)
+### 2. Market leadership (the filter)
+- **Relative Strength vs SPY** — outperforming over 3M, 6M, and ideally 12M (Minervini, O'Neil, Qullamaggie all insist on this)
+- **Within 25% of 52-week high** — no falling knives (rejected if too far below)
+- **Healthy ADR** — Average Daily Range ≥ 2.5% over last 20 bars; a slow-moving stock won't deliver swing-trade returns
+
+### 3. Pullback (the entry zone)
 - Price has pulled back to within ~1 ATR of the 8-EMA
 - **Volume declining** during the pullback vs the prior impulse move (the key tell)
 - Pullback is shallow-to-moderate (didn't break the 20-EMA badly)
 - Sweet spot: 2-7 bars since the impulse peak
 
-### 3. Trigger (when to actually click buy)
+### 4. Trigger (when to actually click buy)
 A bullish reversal candle on the most recent bar (or yesterday):
 - **Bullish engulfing** (strongest)
 - **Hammer / pin bar**
@@ -24,7 +31,7 @@ A bullish reversal candle on the most recent bar (or yesterday):
 
 Per the source material: ideally enter in the last hour of the trading day once the reversal is confirmed.
 
-### 4. Risk management
+### Risk management
 - **Stop** below the trigger bar low / recent swing low (whichever lower)
 - **Position size** so risk = 1-2% of account on the trade (dashboard calculates this for you)
 - **Scale out** in quarters:
@@ -68,11 +75,12 @@ When `dashboard.html` is opened directly via `file://`, click **Load results.jso
 ## Dashboard features
 
 - **Tier filter** defaults to "Actionable" (A + B + WATCH) so you skip past PASS rows by default
+- **Market Leaders filter** — `Leaders (RS3M ≥ 10)` and `Strong (RS3M ≥ 20)` to instantly focus on outperformers
 - **Sector dropdown** to slice the 500-stock universe by Tech / Fin / Hlth / Cons / Ind / Engy / Util / RE / Mat / Comm
 - **Signal filter** — show only setups with a trigger candle today
 - **8-EMA distance filter** — at (±0.5 ATR) or near (±1.0 ATR)
 - **Position sizer** built into the toolbar — punch in your account size and risk %; every expanded row shows shares to buy, capital to deploy, and dollars at risk
-- **Click any row** for full signal breakdown, multi-timeframe stats, and a scaled-out trade plan
+- **Click any row** for full signal breakdown, market leadership stats (RS vs SPY across 4 timeframes, 52w high proximity, ADR, raw stock returns), and a scaled-out trade plan
 - **Showing X of Y** counter tells you how aggressively your filters are cutting
 
 ## Customizing the universe

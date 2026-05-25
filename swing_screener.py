@@ -1,8 +1,9 @@
 """
-8-EMA Pullback Swing Screener
-=============================
+8-EMA Pullback Swing Screener (+ market leadership filters)
+============================================================
 Find stocks in an established uptrend that have just pulled back to the 8-EMA
-on shrinking volume, with a reversal candlestick signaling continuation.
+on shrinking volume, with a reversal candle signaling continuation —
+AND that are leading the market, not lagging.
 
 Strategy:
 
@@ -12,12 +13,17 @@ Strategy:
      - 50-EMA sloping up
      - Weekly trend also up (price > weekly 20-EMA)
 
-  2. PULLBACK FILTER (Daily):
+  2. LEADERSHIP FILTER (vs S&P 500):
+     - Relative Strength (1M, 3M, 6M, 12M) — percentile rank vs SPY
+     - Price within 25% of 52-week high (no falling knives)
+     - Healthy Average Daily Range (ADR ~3%+) — moves enough to be tradeable
+
+  3. PULLBACK FILTER (Daily):
      - Price pulled back to within ~1 ATR of the 8-EMA
      - Pullback volume DECLINING vs the prior impulse move
      - Pullback depth shallow-to-moderate (didn't break 20-EMA badly)
 
-  3. ENTRY TRIGGER (latest 1-2 daily bars):
+  4. ENTRY TRIGGER (latest 1-2 daily bars):
      - Bullish reversal candle near 8-EMA:
          * Bullish engulfing
          * Hammer / pin bar
@@ -280,10 +286,108 @@ def analyze_weekly_trend(df_daily: pd.DataFrame) -> dict:
 
 
 # =============================================================================
+# MARKET LEADERSHIP (RS vs SPY, 52W high, ADR)
+# Inspired by the 14 trader methodologies (Minervini, Qullamaggie, O'Neil,
+# Mike Webster, Patrick Walker, etc.) — all share these filters in common.
+# =============================================================================
+
+def compute_returns(df: pd.DataFrame, periods_days: dict) -> dict:
+    """Compute total returns over multiple lookback windows."""
+    closes = df["Close"]
+    last = float(closes.iloc[-1])
+    out = {}
+    for name, days in periods_days.items():
+        if len(closes) > days:
+            past = float(closes.iloc[-1 - days])
+            out[name] = (last - past) / past * 100 if past > 0 else 0
+        else:
+            out[name] = None
+    return out
+
+
+def analyze_leadership(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> dict:
+    """
+    Compute relative-strength metrics, 52-week high proximity, and ADR.
+
+    Returns:
+      rs_1m / rs_3m / rs_6m / rs_12m: stock_return - spy_return for each window.
+        Positive = outperforming SPY. Note: this is the raw excess-return delta,
+        not a 0-100 percentile rank (which would require a full universe).
+      pct_off_52w_high: how far below the 252-day high the stock is (negative %).
+        e.g. -5.0 means 5% below the 52w high.
+      adr_pct_20d: average daily range as a % of close, over last 20 bars.
+    """
+    if len(df_stock) < 60:
+        return {"valid": False}
+
+    # ---- Returns over 4 windows ----
+    windows = {"1m": 21, "3m": 63, "6m": 126, "12m": 252}
+    stock_returns = compute_returns(df_stock, windows)
+
+    # SPY returns over the SAME calendar dates (align via index intersection)
+    if df_spy is not None and not df_spy.empty:
+        # Align to stock's date range
+        aligned_spy = df_spy.reindex(df_stock.index).ffill()
+        spy_returns = compute_returns(aligned_spy.dropna(), windows)
+    else:
+        spy_returns = {k: 0 for k in windows}
+
+    # Excess return = stock_return - SPY_return for that window
+    rs = {}
+    for k in windows:
+        if stock_returns.get(k) is not None and spy_returns.get(k) is not None:
+            rs[k] = stock_returns[k] - spy_returns[k]
+        else:
+            rs[k] = None
+
+    # ---- 52-week high proximity ----
+    lookback_52w = min(252, len(df_stock))
+    high_52w = float(df_stock["High"].iloc[-lookback_52w:].max())
+    last_close = float(df_stock["Close"].iloc[-1])
+    pct_off_high = (last_close - high_52w) / high_52w * 100  # negative number
+
+    # 52w low proximity (Minervini wants > 30% off the 52w low)
+    low_52w = float(df_stock["Low"].iloc[-lookback_52w:].min())
+    pct_off_low = (last_close - low_52w) / low_52w * 100
+
+    # ---- Average Daily Range (last 20 bars) ----
+    last20 = df_stock.iloc[-20:]
+    daily_ranges = (last20["High"] - last20["Low"]) / last20["Close"] * 100
+    adr_pct = float(daily_ranges.mean())
+
+    return {
+        "valid": True,
+        "rs_1m": rs.get("1m"),
+        "rs_3m": rs.get("3m"),
+        "rs_6m": rs.get("6m"),
+        "rs_12m": rs.get("12m"),
+        "stock_return_3m": stock_returns.get("3m"),
+        "stock_return_6m": stock_returns.get("6m"),
+        "stock_return_12m": stock_returns.get("12m"),
+        "spy_return_3m": spy_returns.get("3m"),
+        "spy_return_6m": spy_returns.get("6m"),
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+        "pct_off_52w_high": pct_off_high,
+        "pct_off_52w_low": pct_off_low,
+        "adr_pct_20d": adr_pct,
+    }
+
+
+def fetch_spy_baseline() -> pd.DataFrame:
+    """Fetch SPY once for the whole run; used as the RS benchmark."""
+    spy = fetch("SPY", period="1y", interval="1d")
+    if spy.empty:
+        print("  ⚠ Could not fetch SPY baseline — RS scores will be zero")
+    return spy
+
+
+# =============================================================================
 # FULL TICKER ANALYSIS
 # =============================================================================
 
-def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000) -> dict:
+def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000,
+                   df_spy: pd.DataFrame = None) -> dict:
     df = fetch(ticker, period="1y", interval="1d")
     if df.empty or len(df) < 80:
         return {"ticker": ticker, "tier": "NO_DATA", "score": 0, "error": "insufficient data"}
@@ -315,6 +419,7 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000) -> dict:
     pullback = analyze_pullback(df, ema8, atr14)
     signal = detect_reversal_signal(df)
     weekly = analyze_weekly_trend(df)
+    leadership = analyze_leadership(df, df_spy) if df_spy is not None else {"valid": False}
 
     stacked = last_close > last_ema20 > last_ema50
 
@@ -414,6 +519,69 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000) -> dict:
             score += 6
             reasons.append("trigger bar closed above 8-EMA")
 
+    # ---- Market leadership (up to 25 pts, can subtract for laggards) ----
+    # Inspired by Minervini's Trend Template, O'Neil's RS, Qullamaggie's AS rankings.
+    if leadership.get("valid"):
+        # RS vs SPY over 3M and 6M — the windows traders watch most
+        rs_3m = leadership.get("rs_3m") or 0
+        rs_6m = leadership.get("rs_6m") or 0
+        rs_12m = leadership.get("rs_12m") or 0
+
+        # 3-month RS — recent leadership
+        if rs_3m > 20:
+            score += 10
+            reasons.append(f"strong RS vs SPY 3M (+{rs_3m:.1f}pp)")
+        elif rs_3m > 10:
+            score += 6
+            reasons.append(f"outperforming SPY 3M (+{rs_3m:.1f}pp)")
+        elif rs_3m > 0:
+            score += 2
+            reasons.append(f"slight RS edge 3M (+{rs_3m:.1f}pp)")
+        else:
+            score -= 4
+            reasons.append(f"⚠ lagging SPY 3M ({rs_3m:.1f}pp)")
+
+        # 6-month RS — durable leadership
+        if rs_6m > 25:
+            score += 8
+            reasons.append(f"strong RS vs SPY 6M (+{rs_6m:.1f}pp)")
+        elif rs_6m > 10:
+            score += 5
+            reasons.append(f"outperforming SPY 6M (+{rs_6m:.1f}pp)")
+        elif rs_6m > 0:
+            score += 2
+
+        # 12-month RS — long-term leader (O'Neil/Minervini classic)
+        if rs_12m > 30:
+            score += 4
+            reasons.append(f"12M leader (+{rs_12m:.1f}pp)")
+
+        # 52-week high proximity — hard floor at -25%
+        pct_off = leadership.get("pct_off_52w_high", -100)
+        if pct_off > -5:
+            score += 6
+            reasons.append(f"near 52w high ({pct_off:.1f}%)")
+        elif pct_off > -15:
+            score += 4
+            reasons.append(f"close to 52w high ({pct_off:.1f}%)")
+        elif pct_off > -25:
+            score += 1
+        else:
+            score -= 6
+            reasons.append(f"⚠ far below 52w high ({pct_off:.1f}%)")
+
+        # ADR (Average Daily Range) — tradeable volatility per Qullamaggie/Moglen
+        adr = leadership.get("adr_pct_20d", 0)
+        if adr > 4:
+            score += 4
+            reasons.append(f"high-momentum ADR ({adr:.1f}%)")
+        elif adr > 2.5:
+            score += 2
+            reasons.append(f"healthy ADR ({adr:.1f}%)")
+        elif adr < 1.2:
+            score -= 2
+            reasons.append(f"⚠ low ADR ({adr:.1f}%) — slow mover")
+
     score = max(0, min(100, score))
 
     # ---- Tier ----
@@ -476,6 +644,17 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000) -> dict:
         "signal_found": signal["found"],
         "signal_pattern": signal.get("pattern"),
         "signal_bars_ago": signal.get("bars_ago"),
+        # Leadership (vs SPY)
+        "rs_1m": leadership.get("rs_1m"),
+        "rs_3m": leadership.get("rs_3m"),
+        "rs_6m": leadership.get("rs_6m"),
+        "rs_12m": leadership.get("rs_12m"),
+        "stock_return_3m": leadership.get("stock_return_3m"),
+        "stock_return_6m": leadership.get("stock_return_6m"),
+        "high_52w": leadership.get("high_52w"),
+        "pct_off_52w_high": leadership.get("pct_off_52w_high"),
+        "pct_off_52w_low": leadership.get("pct_off_52w_low"),
+        "adr_pct_20d": leadership.get("adr_pct_20d"),
         # Trade plan
         "entry": entry,
         "stop": stop,
@@ -519,8 +698,14 @@ def screen(tickers, max_workers=12, min_dollar_vol=20_000_000, progress=True):
     t_start = time.time()
     # Report every 50 for big scans, every 25 for small ones
     report_every = 50 if total > 200 else 25
+
+    # Fetch SPY once as the RS benchmark for the whole scan
+    if progress:
+        print("  Fetching SPY benchmark for RS calc...")
+    df_spy = fetch_spy_baseline()
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(analyze_ticker, t, min_dollar_vol): t for t in tickers}
+        futs = {ex.submit(analyze_ticker, t, min_dollar_vol, df_spy): t for t in tickers}
         for fut in as_completed(futs):
             results.append(fut.result())
             done += 1
@@ -700,7 +885,7 @@ def run(tickers=None, top_n=None, min_dollar_vol=20_000_000,
     if tickers is None:
         print("Loading universe...")
         tickers = get_sp500_universe(use_wikipedia=use_wikipedia)
-    print(f"\n8-EMA Pullback Screener — {datetime.now():%Y-%m-%d %H:%M}")
+    print(f"\n8-EMA Pullback + Leadership Screener — {datetime.now():%Y-%m-%d %H:%M}")
     print(f"Universe: {len(tickers)} tickers · Min $vol: ${min_dollar_vol/1e6:.0f}M\n")
 
     t0 = time.time()
@@ -721,14 +906,16 @@ def run(tickers=None, top_n=None, min_dollar_vol=20_000_000,
     actionable = [r for r in results if r["tier"] in ("A_SETUP", "B_SETUP", "WATCH")]
     show = actionable[:top_n] if top_n else actionable
 
-    print(f"{'TICKER':<8} {'TIER':<10} {'SCORE':<7} {'PRICE':<10} {'D2EMA8':<8} {'PB%':<6} {'VOL_DEC':<8} {'SIGNAL':<22}")
-    print("-" * 90)
+    print(f"{'TICKER':<7} {'TIER':<9} {'SCORE':<6} {'PRICE':<9} {'D2EMA8':<7} {'PB%':<5} {'VOL_DEC':<7} {'RS3M':<7} {'OffH':<7} {'SIGNAL':<22}")
+    print("-" * 110)
     for r in show:
         d = f"{r['dist_to_ema8_atr']:+.2f}" if r.get("dist_to_ema8_atr") is not None else "-"
         pb = f"{r['pullback_pct']:.1f}%" if r.get("pullback_pct") is not None else "-"
         vd = f"{r['vol_decline_ratio']:.2f}x" if r.get("vol_decline_ratio") is not None else "-"
+        rs = f"{r['rs_3m']:+.1f}" if r.get("rs_3m") is not None else "-"
+        off = f"{r['pct_off_52w_high']:.1f}%" if r.get("pct_off_52w_high") is not None else "-"
         sig = f"{r['signal_pattern']}({'today' if r.get('signal_bars_ago') == 0 else 'yest'})" if r.get("signal_found") else "—"
-        print(f"{r['ticker']:<8} {r['tier']:<10} {r['score']:<7} ${r.get('price', 0):<9.2f} {d:<8} {pb:<6} {vd:<8} {sig:<22}")
+        print(f"{r['ticker']:<7} {r['tier']:<9} {r['score']:<6} ${r.get('price', 0):<8.2f} {d:<7} {pb:<5} {vd:<7} {rs:<7} {off:<7} {sig:<22}")
 
     if save:
         # Save next to the script so it works on any machine (and CI)
@@ -737,7 +924,7 @@ def run(tickers=None, top_n=None, min_dollar_vol=20_000_000,
         with open(out, "w") as f:
             json.dump({
                 "generated_at": datetime.utcnow().isoformat() + "Z",
-                "strategy": "8-EMA Pullback",
+                "strategy": "8-EMA Pullback + Leadership",
                 "universe_size": len(tickers),
                 "is_demo_data": False,
                 "results": results,
