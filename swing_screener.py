@@ -507,15 +507,7 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000,
             score += 2
             reasons.append(f"extended pullback ({bsp} bars)")
 
-    # ---- Entry trigger (20 pts) + volume confirmation ----
-    # The pullback should be on declining volume (handled in pullback section).
-    # The trigger candle itself should ideally show volume EXPANSION — institutional
-    # buying stepping in. This is the "tell" that the move is for real, not a hopeful
-    # low-volume bounce. Several methodologies (Mike Webster, Patrick Walker, Stockbee)
-    # all require volume confirmation on the trigger bar.
-    vol_conf_ratio = pullback.get("last_vol_ratio_20d") if pullback.get("valid") else None
-    has_vol_confirm = vol_conf_ratio is not None and vol_conf_ratio >= 1.2
-
+    # ---- Entry trigger (20 pts) ----
     if signal["found"]:
         bonus = {"bullish_engulfing": 14, "hammer/pin_bar": 11, "inside_bar_break": 10}.get(signal["pattern"], 8)
         if signal["bars_ago"] == 1:
@@ -526,20 +518,6 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000,
         if pullback.get("above_ema8"):
             score += 6
             reasons.append("trigger bar closed above 8-EMA")
-
-        # Volume confirmation on the trigger bar itself
-        if vol_conf_ratio is not None:
-            if vol_conf_ratio >= 1.8:
-                score += 10
-                reasons.append(f"strong vol confirmation ({vol_conf_ratio:.2f}x avg)")
-            elif vol_conf_ratio >= 1.2:
-                score += 6
-                reasons.append(f"vol confirmation ({vol_conf_ratio:.2f}x avg)")
-            elif vol_conf_ratio >= 0.8:
-                reasons.append(f"trigger vol average ({vol_conf_ratio:.2f}x avg)")
-            else:
-                score -= 6
-                reasons.append(f"⚠ weak trigger vol ({vol_conf_ratio:.2f}x avg) — no institutional buying")
 
     # ---- Market leadership (up to 25 pts, can subtract for laggards) ----
     # Inspired by Minervini's Trend Template, O'Neil's RS, Qullamaggie's AS rankings.
@@ -610,12 +588,8 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000,
     has_trend = stacked
     has_signal = signal["found"]
     has_pullback = pullback.get("valid") and abs(pullback.get("dist_to_ema8_atr", 99)) <= 1.5
-    # A_SETUP NOW REQUIRES volume confirmation on the trigger bar.
-    # Without it, a textbook chart pattern with no institutional buying gets
-    # demoted to B_SETUP. This is the single biggest accuracy filter:
-    # eliminates "low-volume hopeful bounces" that look perfect but fizzle.
 
-    if score >= 75 and has_trend and has_signal and has_pullback and has_vol_confirm:
+    if score >= 75 and has_trend and has_signal and has_pullback:
         tier = "A_SETUP"
     elif score >= 60 and has_trend and has_pullback:
         tier = "B_SETUP"
@@ -670,9 +644,6 @@ def analyze_ticker(ticker: str, min_dollar_vol: float = 20_000_000,
         "signal_found": signal["found"],
         "signal_pattern": signal.get("pattern"),
         "signal_bars_ago": signal.get("bars_ago"),
-        # Volume confirmation on trigger bar
-        "trigger_vol_ratio": vol_conf_ratio,
-        "has_vol_confirm": has_vol_confirm,
         # Leadership (vs SPY)
         "rs_1m": leadership.get("rs_1m"),
         "rs_3m": leadership.get("rs_3m"),
